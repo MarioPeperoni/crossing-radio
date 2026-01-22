@@ -7,27 +7,43 @@ function usePlayer() {
   const { date } = useClock();
   const currentHourRef = React.useRef<number | null>(null);
   const playerAudioRef = React.useRef<HTMLAudioElement | null>(null);
-  const startAudioRef = React.useRef<HTMLAudioElement | null>(null);
-  const loopAudioRef = React.useRef<HTMLAudioElement | null>(null);
+
+  const preloadedAudioRef = React.useRef(new Map());
 
   const calculateOffset = React.useCallback(() => {
     // Calculate seconds from the start of the current hour
     return date.getMinutes() * 60 + date.getSeconds();
   }, [date]);
 
-  const preloadAudio = React.useCallback((hour: number) => {
-    const startAudio = new Audio(`/songs/nl/${hour}_start.mp3`);
-    const loopAudio = new Audio(`/songs/nl/${hour}_loop.mp3`);
+  const checkAudioExists = async (url: string) => {
+    const res = await fetch(url, { method: 'HEAD' });
+    const contentType = res.headers.get('content-type');
+    return contentType && contentType.startsWith('audio/');
+  };
 
-    startAudio.preload = 'auto';
+  const preloadAudio = React.useCallback(async (hour: number) => {
+    // Check if already preloaded
+    if (preloadedAudioRef.current.has(hour)) return;
+
+    const startUrl = `/songs/nl/${hour}_start.mp3`;
+    const loopUrl = `/songs/nl/${hour}_loop.mp3`;
+
+    // Check for start audio variant
+    const startExists = await checkAudioExists(startUrl);
+
+    const startAudio = startExists ? new Audio(startUrl) : null;
+    const loopAudio = new Audio(loopUrl);
+
+    if (startAudio) startAudio.preload = 'auto';
     loopAudio.preload = 'auto';
 
-    startAudioRef.current = startAudio;
-    loopAudioRef.current = loopAudio;
+    preloadedAudioRef.current.set(hour, {
+      start: startAudio,
+      loop: loopAudio,
+    });
   }, []);
 
-  const playLoop = React.useCallback((hour: number, offset: number = 0) => {
-    const loopAudio = new Audio(`/songs/nl/${hour}_loop.mp3`);
+  const playLoop = React.useCallback((loopAudio: HTMLAudioElement, offset: number = 0) => {
     playerAudioRef.current = loopAudio;
     loopAudio.volume = 0.5;
     loopAudio.loop = true;
@@ -43,36 +59,36 @@ function usePlayer() {
     (hour: number, offset: number = 0) => {
       // Stop playing current audio
       if (playerAudioRef.current) {
-        playerAudioRef.current.pause();
-        playerAudioRef.current.remove();
+        playerAudioRef.current = null;
       }
 
-      const startAudio = new Audio(`/songs/nl/${hour}_start.mp3`);
+      const audioFiles = preloadedAudioRef.current.get(hour);
 
-      startAudio.addEventListener('error', () => {
-        // If start audio doesn't exist, play loop directly
-        playLoop(hour, offset);
-      });
+      if (!audioFiles) {
+        throw new Error(`Audio files for hour ${hour} not loaded`);
+      }
 
-      startAudio.addEventListener('loadedmetadata', () => {
-        const startDuration = startAudio.duration;
+      if (audioFiles.start === null) {
+        playLoop(audioFiles.loop, offset);
+      } else {
+        const startDuration = audioFiles.start.duration;
 
         // Check if offset is not past start audio
         if (offset >= startDuration) {
-          playLoop(hour, offset - startDuration);
+          playLoop(audioFiles.loop, offset - startDuration);
         } else {
           // Play start audio befor loop
-          playerAudioRef.current = startAudio;
-          startAudio.volume = 0.5;
-          startAudio.currentTime = offset;
+          playerAudioRef.current = audioFiles.start;
+          audioFiles.start.volume = 0.5;
+          audioFiles.start.currentTime = offset;
 
-          startAudio.addEventListener('ended', () => {
-            playLoop(hour, 0);
+          audioFiles.start.addEventListener('ended', () => {
+            playLoop(audioFiles.loop, 0);
           });
 
-          startAudio.play().then(() => setIsPlaying(true));
+          audioFiles.start.play().then(() => setIsPlaying(true));
         }
-      });
+      }
     },
     [playLoop],
   );
@@ -107,6 +123,11 @@ function usePlayer() {
       preloadAudio((date.getHours() + 1) % 24);
     }
   }, [date, loadSong, preloadAudio]);
+
+  // Preload current hour audio only once on mount
+  React.useEffect(() => {
+    preloadAudio(date.getHours());
+  }, []);
 
   return { startPlayer, stopPlayer, isPlaying };
 }
