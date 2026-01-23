@@ -14,6 +14,8 @@ function usePlayer() {
   const gainNodeRef = React.useRef<GainNode | null>(null);
   const sourceNodeRef = React.useRef<AudioBufferSourceNode | null>(null);
 
+  const audioElementRef = React.useRef<HTMLAudioElement | null>(null);
+
   const preloadedBufferRef = React.useRef<Map<number, PreloadedBuffer>>(new Map());
 
   const calculateOffset = React.useCallback(() => {
@@ -26,9 +28,46 @@ function usePlayer() {
       audioContextRef.current = new AudioContext();
       gainNodeRef.current = audioContextRef.current.createGain();
       gainNodeRef.current.gain.value = 0.25;
+
+      const destinationNode = audioContextRef.current.createMediaStreamDestination();
       gainNodeRef.current.connect(audioContextRef.current.destination);
+
+      // Create audio element for playback
+      audioElementRef.current = new Audio();
+      audioElementRef.current.srcObject = destinationNode.stream;
     }
   };
+
+  const setupMediaSession = React.useCallback(
+    (hour: number) => {
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: `${hour}:00 ${hour < 12 ? 'AM' : 'PM'}`,
+          artist: 'Animal Crossing New Leaf',
+          album: 'Crossing Radio',
+        });
+
+        navigator.mediaSession.playbackState = 'playing';
+
+        navigator.mediaSession.setActionHandler('play', () => {
+          playHourAudio(hour);
+          navigator.mediaSession.playbackState = 'playing';
+        });
+
+        navigator.mediaSession.setActionHandler('pause', () => {
+          stopCurrentSource();
+          navigator.mediaSession.playbackState = 'paused';
+        });
+
+        navigator.mediaSession.setPositionState({
+          duration: 3600,
+          position: calculateOffset(),
+          playbackRate: 1.0,
+        });
+      }
+    },
+    [isPlaying],
+  );
 
   const fetchAudioBuffer = React.useCallback(async (url: string) => {
     try {
@@ -97,6 +136,7 @@ function usePlayer() {
   );
 
   const stopCurrentSource = React.useCallback(() => {
+    audioElementRef.current?.pause();
     if (sourceNodeRef.current) {
       sourceNodeRef.current.stop();
       sourceNodeRef.current.disconnect();
@@ -116,6 +156,8 @@ function usePlayer() {
         throw new Error(`Audio buffers for hour ${hour} not loaded`);
       }
 
+      setupMediaSession(hour);
+
       if (buffers.start) {
         const startDuration = buffers.start.duration;
         if (offset >= startDuration) {
@@ -127,10 +169,11 @@ function usePlayer() {
         playBuffer(buffers.loop, offset);
       }
     },
-    [playBuffer, stopCurrentSource, calculateOffset],
+    [playBuffer, stopCurrentSource, calculateOffset, setupMediaSession],
   );
 
   const startPlayer = React.useCallback(() => {
+    audioElementRef.current?.play();
     currentHourRef.current = date.getHours();
 
     playHourAudio(currentHourRef.current);
