@@ -1,6 +1,7 @@
 import React from 'react';
 
 import useClock from './useClock';
+import getAssetPath from '../utils/getAssetPath';
 
 function usePlayer() {
   const [isPlaying, setIsPlaying] = React.useState(false);
@@ -25,8 +26,8 @@ function usePlayer() {
     // Check if already preloaded
     if (preloadedAudioRef.current.has(hour)) return;
 
-    const startUrl = `/songs/nl/${hour}_start.mp3`;
-    const loopUrl = `/songs/nl/${hour}_loop.mp3`;
+    const startUrl = getAssetPath(`songs/nl/${hour}_start.mp3`);
+    const loopUrl = getAssetPath(`songs/nl/${hour}_loop.mp3`);
 
     // Check for start audio variant
     const startExists = await checkAudioExists(startUrl);
