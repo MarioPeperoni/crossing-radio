@@ -3,134 +3,155 @@ import React from 'react';
 import useClock from './useClock';
 import getAssetPath from '../utils/getAssetPath';
 
+import type { PreloadedBuffer } from '../types/audio';
+
 function usePlayer() {
   const [isPlaying, setIsPlaying] = React.useState(false);
   const { date } = useClock();
   const currentHourRef = React.useRef<number | null>(null);
-  const playerAudioRef = React.useRef<HTMLAudioElement | null>(null);
 
-  const preloadedAudioRef = React.useRef(new Map());
+  const audioContextRef = React.useRef<AudioContext | null>(null);
+  const gainNodeRef = React.useRef<GainNode | null>(null);
+  const sourceNodeRef = React.useRef<AudioBufferSourceNode | null>(null);
+
+  const preloadedBufferRef = React.useRef<Map<number, PreloadedBuffer>>(new Map());
 
   const calculateOffset = React.useCallback(() => {
     // Calculate seconds from the start of the current hour
     return date.getMinutes() * 60 + date.getSeconds();
   }, [date]);
 
-  const checkAudioExists = async (url: string) => {
-    const res = await fetch(url, { method: 'HEAD' });
-    const contentType = res.headers.get('content-type');
-    return contentType && contentType.startsWith('audio/');
+  const initAudioContext = () => {
+    if (!audioContextRef.current) {
+      audioContextRef.current = new AudioContext();
+      gainNodeRef.current = audioContextRef.current.createGain();
+      gainNodeRef.current.gain.value = 0.25;
+      gainNodeRef.current.connect(audioContextRef.current.destination);
+    }
   };
 
-  const preloadAudio = React.useCallback(async (hour: number) => {
-    // Check if already preloaded
-    if (preloadedAudioRef.current.has(hour)) return;
+  const fetchAudioBuffer = React.useCallback(async (url: string) => {
+    try {
+      const assetPath = getAssetPath(url);
+      const res = await fetch(assetPath);
+      if (!res.ok) return null;
 
-    const startUrl = getAssetPath(`songs/nl/${hour}_start.mp3`);
-    const loopUrl = getAssetPath(`songs/nl/${hour}_loop.mp3`);
+      const arrayBuffer = await res.arrayBuffer();
+      const audioContext = audioContextRef.current;
 
-    // Check for start audio variant
-    const startExists = await checkAudioExists(startUrl);
+      if (!audioContext) {
+        throw new Error('AudioContext not initialized');
+      }
 
-    const startAudio = startExists ? new Audio(startUrl) : null;
-    const loopAudio = new Audio(loopUrl);
-
-    if (startAudio) startAudio.preload = 'auto';
-    loopAudio.preload = 'auto';
-
-    preloadedAudioRef.current.set(hour, {
-      start: startAudio,
-      loop: loopAudio,
-    });
+      return await audioContext.decodeAudioData(arrayBuffer);
+    } catch {
+      return null;
+    }
   }, []);
 
-  const playLoop = React.useCallback((loopAudio: HTMLAudioElement, offset: number = 0) => {
-    playerAudioRef.current = loopAudio;
-    loopAudio.volume = 0.5;
-    loopAudio.loop = true;
-    loopAudio.currentTime = offset % loopAudio.duration;
+  const preloadAudio = React.useCallback(
+    async (hour: number) => {
+      // Check if already preloaded
+      if (preloadedBufferRef.current.has(hour)) return;
 
-    loopAudio.play().then(() => setIsPlaying(true));
-  }, []);
+      const [startBuffer, loopBuffer] = await Promise.all([
+        fetchAudioBuffer(`songs/nl/${hour}_start.mp3`),
+        fetchAudioBuffer(`songs/nl/${hour}_loop.mp3`),
+      ]);
 
-  const loadSong = React.useCallback(
-    (hour: number, offset: number = 0) => {
-      // Stop playing current audio
-      if (playerAudioRef.current) {
-        playerAudioRef.current.pause();
-        playerAudioRef.current.remove();
-        playerAudioRef.current = null;
+      if (!loopBuffer) {
+        throw new Error(`Failed to load loop audio for hour ${hour}`);
       }
 
-      const audioFiles = preloadedAudioRef.current.get(hour);
-
-      if (!audioFiles) {
-        throw new Error(`Audio files for hour ${hour} not loaded`);
-      }
-
-      if (audioFiles.start === null) {
-        playLoop(audioFiles.loop, offset);
-      } else {
-        const startDuration = audioFiles.start.duration;
-
-        // Check if offset is not past start audio
-        if (offset >= startDuration) {
-          playLoop(audioFiles.loop, offset - startDuration);
-        } else {
-          // Play start audio befor loop
-          playerAudioRef.current = audioFiles.start;
-          audioFiles.start.volume = 0.5;
-          audioFiles.start.currentTime = offset;
-
-          audioFiles.start.addEventListener('ended', () => {
-            playLoop(audioFiles.loop, 0);
-          });
-
-          audioFiles.start.play().then(() => setIsPlaying(true));
-        }
-      }
+      preloadedBufferRef.current.set(hour, {
+        start: startBuffer,
+        loop: loopBuffer,
+      });
     },
-    [playLoop],
+    [fetchAudioBuffer],
   );
 
-  const stopPlayer = React.useCallback(() => {
-    if (playerAudioRef.current) {
-      playerAudioRef.current.pause();
-      playerAudioRef.current.remove();
-      playerAudioRef.current = null;
+  const playBuffer = React.useCallback(
+    (buffer: AudioBuffer, offset: number, onEnd?: () => void) => {
+      const audioContext = audioContextRef.current;
+      const gainNode = gainNodeRef.current;
+
+      if (!audioContext || !gainNode) {
+        throw new Error('AudioContext or GainNode not initialized');
+      }
+
+      const source = audioContext.createBufferSource();
+      source.buffer = buffer;
+      source.loop = !onEnd;
+      source.connect(gainNode);
+
+      if (onEnd) {
+        source.onended = onEnd;
+      }
+
+      source.start(0, offset % buffer.duration);
+      sourceNodeRef.current = source;
+      setIsPlaying(true);
+    },
+    [],
+  );
+
+  const stopCurrentSource = React.useCallback(() => {
+    if (sourceNodeRef.current) {
+      sourceNodeRef.current.stop();
+      sourceNodeRef.current.disconnect();
+      sourceNodeRef.current.onended = null;
+      sourceNodeRef.current = null;
+      setIsPlaying(false);
     }
-    setIsPlaying(false);
   }, []);
+
+  const playHourAudio = React.useCallback(
+    (hour: number) => {
+      stopCurrentSource();
+      const offset = calculateOffset();
+      const buffers = preloadedBufferRef.current.get(hour);
+
+      if (!buffers) {
+        throw new Error(`Audio buffers for hour ${hour} not loaded`);
+      }
+
+      if (buffers.start) {
+        const startDuration = buffers.start.duration;
+        if (offset >= startDuration) {
+          playBuffer(buffers.loop, offset - startDuration);
+        } else {
+          playBuffer(buffers.start, offset, () => playBuffer(buffers.loop, 0));
+        }
+      } else {
+        playBuffer(buffers.loop, offset);
+      }
+    },
+    [playBuffer, stopCurrentSource, calculateOffset],
+  );
 
   const startPlayer = React.useCallback(() => {
     currentHourRef.current = date.getHours();
-    const offset = calculateOffset();
 
-    loadSong(currentHourRef.current, offset);
+    playHourAudio(currentHourRef.current);
     preloadAudio((currentHourRef.current + 1) % 24);
-
-    return () => {
-      if (playerAudioRef.current) {
-        playerAudioRef.current.pause();
-        playerAudioRef.current = null;
-      }
-    };
-  }, [date, loadSong, preloadAudio, calculateOffset]);
+  }, [date, preloadAudio, playHourAudio]);
 
   React.useEffect(() => {
     if (currentHourRef.current !== null && currentHourRef.current !== date.getHours()) {
-      loadSong(date.getHours(), 0);
+      playHourAudio(date.getHours());
       currentHourRef.current = date.getHours();
       preloadAudio((date.getHours() + 1) % 24);
     }
-  }, [date, loadSong, preloadAudio]);
+  }, [date, playHourAudio, preloadAudio]);
 
   // Preload current hour audio only once on mount
   React.useEffect(() => {
+    initAudioContext();
     preloadAudio(date.getHours());
   }, []);
 
-  return { startPlayer, stopPlayer, isPlaying };
+  return { startPlayer, stopPlayer: stopCurrentSource, isPlaying };
 }
 
 export default usePlayer;
