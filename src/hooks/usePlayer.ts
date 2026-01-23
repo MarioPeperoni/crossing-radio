@@ -48,10 +48,7 @@ function usePlayer() {
     playerAudioRef.current = loopAudio;
     loopAudio.volume = 0.5;
     loopAudio.loop = true;
-
-    loopAudio.addEventListener('loadedmetadata', () => {
-      loopAudio.currentTime = offset % loopAudio.duration;
-    });
+    loopAudio.currentTime = offset % loopAudio.duration;
 
     loopAudio.play().then(() => setIsPlaying(true));
   }, []);
@@ -60,6 +57,8 @@ function usePlayer() {
     (hour: number, offset: number = 0) => {
       // Stop playing current audio
       if (playerAudioRef.current) {
+        playerAudioRef.current.pause();
+        playerAudioRef.current.remove();
         playerAudioRef.current = null;
       }
 
@@ -97,6 +96,7 @@ function usePlayer() {
   const stopPlayer = React.useCallback(() => {
     if (playerAudioRef.current) {
       playerAudioRef.current.pause();
+      playerAudioRef.current.remove();
       playerAudioRef.current = null;
     }
     setIsPlaying(false);
