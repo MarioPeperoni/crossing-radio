@@ -1,13 +1,17 @@
 import React from 'react';
 
-import useClock from './useClock';
+import useGlobalTime from './useGlobalTime';
+import useMediaSession from './useMediaSession';
+
 import getAssetPath from '../utils/getAssetPath';
+import calculateOffset from '../utils/calcOffset';
 
 import type { PreloadedBuffer } from '../types/audio';
 
 function usePlayer() {
   const [isPlaying, setIsPlaying] = React.useState(false);
-  const { date } = useClock();
+  const date = useGlobalTime();
+  const mediaSession = useMediaSession();
   const currentHourRef = React.useRef<number | null>(null);
 
   const audioContextRef = React.useRef<AudioContext | null>(null);
@@ -17,11 +21,6 @@ function usePlayer() {
   const audioElementRef = React.useRef<HTMLAudioElement | null>(null);
 
   const preloadedBufferRef = React.useRef<Map<number, PreloadedBuffer>>(new Map());
-
-  const calculateOffset = React.useCallback(() => {
-    // Calculate seconds from the start of the current hour
-    return date.getMinutes() * 60 + date.getSeconds();
-  }, [date]);
 
   const initAudioContext = () => {
     if (!audioContextRef.current) {
@@ -37,37 +36,6 @@ function usePlayer() {
       audioElementRef.current.srcObject = destinationNode.stream;
     }
   };
-
-  const setupMediaSession = React.useCallback(
-    (hour: number) => {
-      if ('mediaSession' in navigator) {
-        navigator.mediaSession.metadata = new MediaMetadata({
-          title: `${hour}:00 ${hour < 12 ? 'AM' : 'PM'}`,
-          artist: 'Animal Crossing New Leaf',
-          album: 'Crossing Radio',
-        });
-
-        navigator.mediaSession.playbackState = 'playing';
-
-        navigator.mediaSession.setActionHandler('play', () => {
-          playHourAudio(hour);
-          navigator.mediaSession.playbackState = 'playing';
-        });
-
-        navigator.mediaSession.setActionHandler('pause', () => {
-          stopCurrentSource();
-          navigator.mediaSession.playbackState = 'paused';
-        });
-
-        navigator.mediaSession.setPositionState({
-          duration: 3600,
-          position: calculateOffset(),
-          playbackRate: 1.0,
-        });
-      }
-    },
-    [isPlaying],
-  );
 
   const fetchAudioBuffer = React.useCallback(async (url: string) => {
     try {
@@ -88,97 +56,90 @@ function usePlayer() {
     }
   }, []);
 
-  const preloadAudio = React.useCallback(
-    async (hour: number) => {
-      // Check if already preloaded
-      if (preloadedBufferRef.current.has(hour)) return;
+  async function preloadAudio(hour: number) {
+    // Check if already preloaded
+    if (preloadedBufferRef.current.has(hour)) return;
 
-      const [startBuffer, loopBuffer] = await Promise.all([
-        fetchAudioBuffer(`songs/nl/${hour}_start.mp3`),
-        fetchAudioBuffer(`songs/nl/${hour}_loop.mp3`),
-      ]);
+    const [startBuffer, loopBuffer] = await Promise.all([
+      fetchAudioBuffer(`songs/nl/${hour}_start.mp3`),
+      fetchAudioBuffer(`songs/nl/${hour}_loop.mp3`),
+    ]);
 
-      if (!loopBuffer) {
-        throw new Error(`Failed to load loop audio for hour ${hour}`);
-      }
+    if (!loopBuffer) {
+      throw new Error(`Failed to load loop audio for hour ${hour}`);
+    }
 
-      preloadedBufferRef.current.set(hour, {
-        start: startBuffer,
-        loop: loopBuffer,
-      });
-    },
-    [fetchAudioBuffer],
-  );
+    preloadedBufferRef.current.set(hour, {
+      start: startBuffer,
+      loop: loopBuffer,
+    });
+  }
 
-  const playBuffer = React.useCallback(
-    (buffer: AudioBuffer, offset: number, onEnd?: () => void) => {
-      const audioContext = audioContextRef.current;
-      const gainNode = gainNodeRef.current;
+  function playBuffer(buffer: AudioBuffer, offset: number, onEnd?: () => void) {
+    const audioContext = audioContextRef.current;
+    const gainNode = gainNodeRef.current;
 
-      if (!audioContext || !gainNode) {
-        throw new Error('AudioContext or GainNode not initialized');
-      }
+    if (!audioContext || !gainNode) {
+      throw new Error('AudioContext or GainNode not initialized');
+    }
 
-      const source = audioContext.createBufferSource();
-      source.buffer = buffer;
-      source.loop = !onEnd;
-      source.connect(gainNode);
+    const source = audioContext.createBufferSource();
+    source.buffer = buffer;
+    source.loop = !onEnd;
+    source.connect(gainNode);
 
-      if (onEnd) {
-        source.onended = onEnd;
-      }
+    if (onEnd) {
+      source.onended = onEnd;
+    }
 
-      source.start(0, offset % buffer.duration);
-      sourceNodeRef.current = source;
-      setIsPlaying(true);
-    },
-    [],
-  );
+    source.start(0, offset % buffer.duration);
+    sourceNodeRef.current = source;
+    setIsPlaying(true);
+  }
 
-  const stopCurrentSource = React.useCallback(() => {
-    audioElementRef.current?.pause();
+  function stopCurrentSource() {
     if (sourceNodeRef.current) {
       sourceNodeRef.current.stop();
       sourceNodeRef.current.disconnect();
       sourceNodeRef.current.onended = null;
       sourceNodeRef.current = null;
       setIsPlaying(false);
+      audioElementRef.current?.pause();
     }
-  }, []);
+    mediaSession.pause();
+  }
 
-  const playHourAudio = React.useCallback(
-    (hour: number) => {
-      stopCurrentSource();
-      const offset = calculateOffset();
-      const buffers = preloadedBufferRef.current.get(hour);
+  function playHourAudio(hour: number) {
+    stopCurrentSource();
+    const offset = calculateOffset();
+    const buffers = preloadedBufferRef.current.get(hour);
 
-      if (!buffers) {
-        throw new Error(`Audio buffers for hour ${hour} not loaded`);
-      }
+    if (!buffers) {
+      throw new Error(`Audio buffers for hour ${hour} not loaded`);
+    }
 
-      setupMediaSession(hour);
-
-      if (buffers.start) {
-        const startDuration = buffers.start.duration;
-        if (offset >= startDuration) {
-          playBuffer(buffers.loop, offset - startDuration);
-        } else {
-          playBuffer(buffers.start, offset, () => playBuffer(buffers.loop, 0));
-        }
+    if (buffers.start) {
+      const startDuration = buffers.start.duration;
+      if (offset >= startDuration) {
+        playBuffer(buffers.loop, offset - startDuration);
       } else {
-        playBuffer(buffers.loop, offset);
+        playBuffer(buffers.start, offset, () => playBuffer(buffers.loop, 0));
       }
-    },
-    [playBuffer, stopCurrentSource, calculateOffset, setupMediaSession],
-  );
+    } else {
+      playBuffer(buffers.loop, offset);
+    }
 
-  const startPlayer = React.useCallback(() => {
+    mediaSession.createMediaSession(startPlayer, stopCurrentSource);
+    mediaSession.refreshSongTitle();
+  }
+
+  function startPlayer() {
     audioElementRef.current?.play();
     currentHourRef.current = date.getHours();
 
     playHourAudio(currentHourRef.current);
     preloadAudio((currentHourRef.current + 1) % 24);
-  }, [date, preloadAudio, playHourAudio]);
+  }
 
   React.useEffect(() => {
     if (currentHourRef.current !== null && currentHourRef.current !== date.getHours()) {
@@ -186,7 +147,7 @@ function usePlayer() {
       currentHourRef.current = date.getHours();
       preloadAudio((date.getHours() + 1) % 24);
     }
-  }, [date, playHourAudio, preloadAudio]);
+  }, [date]);
 
   // Preload current hour audio only once on mount
   React.useEffect(() => {

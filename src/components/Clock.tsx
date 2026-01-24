@@ -1,17 +1,17 @@
-import useClock from '../hooks/useClock';
-
 import { format } from 'date-fns';
-import { twMerge } from 'tailwind-merge';
+
+import useGlobalTime from '../hooks/useGlobalTime';
 
 function Clock() {
-  const { date, tick } = useClock();
+  const date = useGlobalTime();
+  const tick = date.getSeconds() % 2 === 0;
 
   return (
     <div className="flex flex-col items-center space-y-2">
       <div className="flex space-x-3 items-end">
         <div className="relative font-bold text-5xl">
           <span>{format(date, 'h')}</span>
-          <span className={twMerge(tick && 'opacity-0')}>{':'}</span>
+          <span className={tick ? '' : 'opacity-0'}>{':'}</span>
           <span>{format(date, 'mm')}</span>
         </div>
         <span className="text-3xl font-bold">{format(date, 'aa')}</span>
