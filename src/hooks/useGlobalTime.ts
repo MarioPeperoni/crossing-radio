@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 
-const DEBUG_TIME_OVERRIDE: string | null = '23:30:00';
+const DEBUG_TIME_OVERRIDE: string | null = import.meta.env.VITE_DEBUG_TIME_OVERRIDE || null;
 
 function parseDebugTimeOverride(): Date {
   const [hours, minutes, seconds] = DEBUG_TIME_OVERRIDE!.split(':').map(Number);
