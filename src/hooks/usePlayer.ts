@@ -111,7 +111,7 @@ function usePlayer() {
 
   function playHourAudio(hour: number) {
     stopCurrentSource();
-    const offset = calculateOffset();
+    const offset = calculateOffset(date);
     const buffers = preloadedBufferRef.current.get(hour);
 
     if (!buffers) {
@@ -129,12 +129,12 @@ function usePlayer() {
       playBuffer(buffers.loop, offset);
     }
 
+    audioElementRef.current?.play();
     mediaSession.createMediaSession(startPlayer, stopCurrentSource);
     mediaSession.refreshSongTitle();
   }
 
   function startPlayer() {
-    audioElementRef.current?.play();
     currentHourRef.current = date.getHours();
 
     playHourAudio(currentHourRef.current);

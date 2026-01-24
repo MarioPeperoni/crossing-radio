@@ -33,8 +33,13 @@ function useMediaSession() {
       navigator.mediaSession.playbackState = 'paused';
     }
   };
+  const play = () => {
+    if ('mediaSession' in navigator) {
+      navigator.mediaSession.playbackState = 'playing';
+    }
+  };
 
-  return { createMediaSession, refreshSongTitle, pause };
+  return { createMediaSession, refreshSongTitle, pause, play };
 }
 
 export default useMediaSession;
